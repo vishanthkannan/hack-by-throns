@@ -10,6 +10,10 @@ import pandas as pd
 import re
 import os
 from typing import Dict, List, Optional
+import logging
+import time
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 app = Flask(__name__, template_folder='viewer_templates')
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -472,11 +476,14 @@ def upload_file():
         if not allowed_file(file.filename):
             return jsonify({'success': False, 'message': 'Only PDF, CSV, and Excel files are allowed'}), 400
         
-        # Save uploaded file
+        # Save uploaded file (ensure unique filename to avoid collisions)
         filename = secure_filename(file.filename)
         file_ext = filename.rsplit('.', 1)[1].lower()
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        base, ext = os.path.splitext(filename)
+        unique_filename = f"{base}_{int(time.time())}{ext}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(filepath)
+        logging.info(f"Saved uploaded file to {filepath}")
         
         # Extract data based on file type
         complaints = []
@@ -518,14 +525,17 @@ def upload_file():
 def save_to_excel():
     """Save extracted complaints to master Excel"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
+        if not data or 'complaints' not in data:
+            return jsonify({'success': False, 'message': 'Invalid JSON payload or missing "complaints"'}), 400
         complaints = data.get('complaints', [])
-        
+        # Validate payload
+        if not isinstance(complaints, list):
+            return jsonify({'success': False, 'message': '"complaints" must be a list'}), 400
+        # Keep only dict items
+        complaints = [c for c in complaints if isinstance(c, dict)]
         if not complaints:
-            return jsonify({
-                'success': False,
-                'message': 'No complaints to save'
-            }), 400
+            return jsonify({'success': False, 'message': 'No valid complaint objects to save'}), 400
         
         result = save_to_master_excel(complaints)
         
@@ -564,13 +574,23 @@ def download_excel():
                 'message': 'Master Excel file not found. Please save a complaint first.'
             }), 404
         
-        # Send file securely
-        return send_file(
-            master_file,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            as_attachment=True,
-            download_name=app.config['MASTER_EXCEL']
-        )
+        # Send file securely (support Flask versions with different parameter names)
+        try:
+            return send_file(
+                master_file,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                as_attachment=True,
+                download_name=app.config['MASTER_EXCEL']
+            )
+        except TypeError:
+            # Older Flask versions expect attachment_filename
+            logging.info('Falling back to older send_file parameter name attachment_filename')
+            return send_file(
+                master_file,
+                mimetype='application/vnd.openxmlformats-officedocument-spreadsheetml.sheet',
+                as_attachment=True,
+                attachment_filename=app.config['MASTER_EXCEL']
+            )
     
     except Exception as e:
         return jsonify({

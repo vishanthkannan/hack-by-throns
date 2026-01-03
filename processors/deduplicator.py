@@ -1,8 +1,8 @@
 """
 Deduplicator Module
 Handles intelligence features and master Excel file management
-WITH SAFE EXCEL WRITING to prevent type inference and scientific notation
-FIXED SCHEMA APPROACH to prevent column mapping errors
+FINAL HARD RESET: Fixed schema with positional mapping only
+NO dictionary-based DataFrame creation - ONLY positional mapping
 """
 
 import pandas as pd
@@ -10,11 +10,11 @@ import os
 from datetime import datetime
 from typing import List, Dict, Tuple
 from openpyxl import load_workbook
-from openpyxl.styles import NamedStyle
+from openpyxl.styles import Font, Alignment
 from processors.normalizer import normalize_string, normalize_amount, normalize_complaint_id
 
 
-# FIXED COLUMN SCHEMA - Order matters!
+# FIXED COLUMN SCHEMA - Defined ONCE, used everywhere
 COLUMNS = [
     "Complaint_ID",
     "Complaint_Date",
@@ -100,17 +100,21 @@ def calculate_reporting_delay(complaint: Dict) -> Tuple[int, str]:
     Feature 3: Reporting Delay Indicator
     Compute Reporting_Delay_Days = Complaint_Date - Incident_Date
     If delay > 7 days: DELAYED, Else: ON_TIME
+    Compute reporting delay ONLY if both dates exist
+    If dates missing: reporting_delay_days = 0, reporting_delay_status = "NOT_AVAILABLE"
     """
     complaint_date_str = str(complaint.get('Complaint_Date', '')).strip()
     incident_date_str = str(complaint.get('Incident_Date', '')).strip()
     
+    # Check if dates are missing or "Not Available"
     if not complaint_date_str or complaint_date_str == "Not Available":
-        return 0, "UNKNOWN"
+        return 0, "NOT_AVAILABLE"
     
     if not incident_date_str or incident_date_str == "Not Available":
-        return 0, "UNKNOWN"
+        return 0, "NOT_AVAILABLE"
     
     try:
+        # Parse dates using pd.to_datetime (handles YYYY-MM-DD format)
         complaint_date = pd.to_datetime(complaint_date_str)
         incident_date = pd.to_datetime(incident_date_str)
         
@@ -123,7 +127,7 @@ def calculate_reporting_delay(complaint: Dict) -> Tuple[int, str]:
         
         return delay_days, status
     except:
-        return 0, "UNKNOWN"
+        return 0, "NOT_AVAILABLE"
 
 
 def calculate_transaction_pattern(complaint: Dict) -> str:
@@ -183,44 +187,75 @@ def apply_intelligence_features(complaints: List[Dict]) -> List[Dict]:
 def build_row_from_complaint(complaint: Dict, source_file_type: str) -> Dict:
     """
     Build a row dictionary with ONLY the fixed schema columns
-    This ensures correct mapping - no extra keys, no missing keys
+    Uses explicit type casting as required
+    NO extra keys, NO missing keys
     """
     # Extract and normalize all fields explicitly
-    complaint_id = normalize_complaint_id(complaint.get('Complaint_ID', ''))
-    complaint_date = normalize_string(complaint.get('Complaint_Date', ''))
-    incident_date = normalize_string(complaint.get('Incident_Date', ''))
-    category = normalize_string(complaint.get('Category', ''))
-    sub_category = normalize_string(complaint.get('Sub_Category', ''))
-    district = normalize_string(complaint.get('District', ''))
-    state = normalize_string(complaint.get('State', ''))
-    amount_lost = normalize_amount(complaint.get('Amount_Lost', 0))
-    status = normalize_string(complaint.get('Status', 'Pending'))
-    transaction_count = int(complaint.get('Transaction_Count', 0))
-    data_quality_score = int(complaint.get('Data_Quality_Score', 0))
-    investigation_ready = str(complaint.get('Investigation_Ready', 'NO'))
-    reporting_delay_days = int(complaint.get('Reporting_Delay_Days', 0))
-    reporting_delay_status = str(complaint.get('Reporting_Delay_Status', 'UNKNOWN'))
-    transaction_pattern = str(complaint.get('Transaction_Pattern', 'MIXED'))
+    complaint_id_raw = complaint.get('Complaint_ID', '')
+    complaint_id = normalize_complaint_id(complaint_id_raw)
+    
+    complaint_date_raw = complaint.get('Complaint_Date', '')
+    complaint_date = normalize_string(complaint_date_raw)
+    
+    incident_date_raw = complaint.get('Incident_Date', '')
+    incident_date = normalize_string(incident_date_raw)
+    
+    category_raw = complaint.get('Category', '')
+    category = normalize_string(category_raw)
+    
+    sub_category_raw = complaint.get('Sub_Category', '')
+    sub_category = normalize_string(sub_category_raw)
+    
+    district_raw = complaint.get('District', '')
+    district = normalize_string(district_raw)
+    
+    state_raw = complaint.get('State', '')
+    state = normalize_string(state_raw)
+    
+    amount_lost_raw = complaint.get('Amount_Lost', 0)
+    amount_lost = normalize_amount(amount_lost_raw)
+    
+    status_raw = complaint.get('Status', 'Pending')
+    status = normalize_string(status_raw)
+    
+    transaction_count_raw = complaint.get('Transaction_Count', 0)
+    transaction_count = int(transaction_count_raw) if transaction_count_raw else 0
+    
+    data_quality_score_raw = complaint.get('Data_Quality_Score', 0)
+    data_quality_score = int(data_quality_score_raw) if data_quality_score_raw else 0
+    
+    investigation_ready_raw = complaint.get('Investigation_Ready', 'NO')
+    investigation_ready = str(investigation_ready_raw)
+    
+    reporting_delay_days_raw = complaint.get('Reporting_Delay_Days', 0)
+    reporting_delay_days = int(reporting_delay_days_raw) if reporting_delay_days_raw else 0
+    
+    reporting_delay_status_raw = complaint.get('Reporting_Delay_Status', 'UNKNOWN')
+    reporting_delay_status = str(reporting_delay_status_raw)
+    
+    transaction_pattern_raw = complaint.get('Transaction_Pattern', 'MIXED')
+    transaction_pattern = str(transaction_pattern_raw)
+    
     source_file_type_str = str(source_file_type).upper()
     
-    # Build row with EXACT schema - no extra keys
+    # Build row with EXACT schema - explicit type casting
     row = {
-        "Complaint_ID": complaint_id,
-        "Complaint_Date": complaint_date,
-        "Incident_Date": incident_date,
-        "Category": category,
-        "Sub_Category": sub_category,
-        "District": district,
-        "State": state,
-        "Amount_Lost": amount_lost,
-        "Status": status,
-        "Transaction_Count": transaction_count,
-        "Data_Quality_Score": data_quality_score,
-        "Investigation_Ready": investigation_ready,
-        "Reporting_Delay_Days": reporting_delay_days,
-        "Reporting_Delay_Status": reporting_delay_status,
-        "Transaction_Pattern": transaction_pattern,
-        "Source_File_Type": source_file_type_str
+        "Complaint_ID": str(complaint_id),  # MUST be NCRP acknowledgement number
+        "Complaint_Date": str(complaint_date),
+        "Incident_Date": str(incident_date),
+        "Category": str(category),
+        "Sub_Category": str(sub_category),
+        "District": str(district),
+        "State": str(state),
+        "Amount_Lost": float(amount_lost),
+        "Status": str(status),
+        "Transaction_Count": int(transaction_count),
+        "Data_Quality_Score": int(data_quality_score),
+        "Investigation_Ready": str(investigation_ready),
+        "Reporting_Delay_Days": int(reporting_delay_days),
+        "Reporting_Delay_Status": str(reporting_delay_status),
+        "Transaction_Pattern": str(transaction_pattern),
+        "Source_File_Type": str(source_file_type_str)
     }
     
     return row
@@ -232,32 +267,38 @@ def safe_write_excel(df: pd.DataFrame, filepath: str):
     Prevents scientific notation and type inference issues
     Sets column widths and formats headers
     """
-    # Ensure DataFrame has exactly the columns we expect, in the right order
+    # Ensure DataFrame columns match fixed schema exactly
     if list(df.columns) != COLUMNS:
-        # Reorder and select only our columns
-        df = df[[col for col in COLUMNS if col in df.columns]]
-        # Add missing columns
-        for col in COLUMNS:
-            if col not in df.columns:
-                if col == 'Amount_Lost':
-                    df[col] = 0.0
-                elif col in ['Transaction_Count', 'Data_Quality_Score', 'Reporting_Delay_Days']:
-                    df[col] = 0
+        # Create new DataFrame with fixed schema
+        data = []
+        for idx in range(len(df)):
+            row_data = []
+            for col in COLUMNS:
+                if col in df.columns:
+                    row_data.append(df.iloc[idx][col])
                 else:
-                    df[col] = 'Not Available'
-        # Reorder to match COLUMNS exactly
-        df = df[COLUMNS]
+                    # Default values for missing columns
+                    if col == 'Amount_Lost':
+                        row_data.append(0.0)
+                    elif col in ['Transaction_Count', 'Data_Quality_Score', 'Reporting_Delay_Days']:
+                        row_data.append(0)
+                    else:
+                        row_data.append('Not Available')
+            data.append(row_data)
+        df = pd.DataFrame(data, columns=COLUMNS)
     
     # Force data types BEFORE writing
     df['Complaint_ID'] = df['Complaint_ID'].astype(str)
+    df['Complaint_Date'] = df['Complaint_Date'].astype(str)
+    df['Incident_Date'] = df['Incident_Date'].astype(str)
+    df['Category'] = df['Category'].astype(str)
+    df['Sub_Category'] = df['Sub_Category'].astype(str)
     df['District'] = df['District'].astype(str)
     df['State'] = df['State'].astype(str)
-    df['Sub_Category'] = df['Sub_Category'].astype(str)
-    df['Transaction_Pattern'] = df['Transaction_Pattern'].astype(str)
-    df['Category'] = df['Category'].astype(str)
     df['Status'] = df['Status'].astype(str)
     df['Investigation_Ready'] = df['Investigation_Ready'].astype(str)
     df['Reporting_Delay_Status'] = df['Reporting_Delay_Status'].astype(str)
+    df['Transaction_Pattern'] = df['Transaction_Pattern'].astype(str)
     df['Source_File_Type'] = df['Source_File_Type'].astype(str)
     
     df['Amount_Lost'] = pd.to_numeric(df['Amount_Lost'], errors='coerce').fillna(0.0).astype(float)
@@ -265,7 +306,7 @@ def safe_write_excel(df: pd.DataFrame, filepath: str):
     df['Data_Quality_Score'] = pd.to_numeric(df['Data_Quality_Score'], errors='coerce').fillna(0).astype(int)
     df['Reporting_Delay_Days'] = pd.to_numeric(df['Reporting_Delay_Days'], errors='coerce').fillna(0).astype(int)
     
-    # First, write using pandas (creates the file structure)
+    # Write using pandas with openpyxl engine
     df.to_excel(filepath, index=False, engine='openpyxl')
     
     # Now open with openpyxl to apply explicit formatting
@@ -274,37 +315,41 @@ def safe_write_excel(df: pd.DataFrame, filepath: str):
     
     # Set column widths to prevent ########
     column_widths = {
-        'A': 20,  # Complaint_ID
+        'A': 25,  # Complaint_ID
         'B': 15,  # Complaint_Date
         'C': 15,  # Incident_Date
         'D': 20,  # Category
-        'E': 25,  # Sub_Category
+        'E': 30,  # Sub_Category
         'F': 20,  # District
         'G': 20,  # State
-        'H': 15,  # Amount_Lost
+        'H': 18,  # Amount_Lost
         'I': 15,  # Status
         'J': 18,  # Transaction_Count
         'K': 20,  # Data_Quality_Score
-        'L': 20,  # Investigation_Ready
+        'L': 22,  # Investigation_Ready
         'M': 22,  # Reporting_Delay_Days
         'N': 25,  # Reporting_Delay_Status
-        'O': 20,  # Transaction_Pattern
+        'O': 25,  # Transaction_Pattern
         'P': 18   # Source_File_Type
     }
     
     for col_letter, width in column_widths.items():
         ws.column_dimensions[col_letter].width = width
     
-    # Find column indices and apply formatting
+    # Apply formatting to each column
     header_row = 1
     for col_idx, header in enumerate(COLUMNS, start=1):
         col_letter = ws.cell(row=header_row, column=col_idx).column_letter
         
+        # Format header
+        header_cell = ws.cell(row=header_row, column=col_idx)
+        header_cell.font = Font(bold=True)
+        header_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        
         # Apply text format to Complaint_ID column
         if header == 'Complaint_ID':
-            for row_idx in range(2, len(df) + 2):  # Start from row 2 (skip header)
+            for row_idx in range(2, len(df) + 2):
                 cell = ws.cell(row=row_idx, column=col_idx)
-                # Force as string
                 if cell.value is not None:
                     cell.value = str(cell.value)
                 cell.number_format = '@'  # Text format
@@ -315,19 +360,11 @@ def safe_write_excel(df: pd.DataFrame, filepath: str):
                 cell = ws.cell(row=row_idx, column=col_idx)
                 if cell.value is not None:
                     try:
-                        # Ensure it's a number, format as number with 2 decimals
                         amount = float(cell.value)
                         cell.value = amount
                         cell.number_format = '#,##0.00'  # Number format with commas
                     except:
                         pass
-    
-    # Make header row bold and wrap text
-    from openpyxl.styles import Font, Alignment
-    for col_idx in range(1, len(COLUMNS) + 1):
-        header_cell = ws.cell(row=header_row, column=col_idx)
-        header_cell.font = Font(bold=True)
-        header_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
     
     # Save the workbook
     wb.save(filepath)
@@ -336,7 +373,8 @@ def safe_write_excel(df: pd.DataFrame, filepath: str):
 def append_to_master_excel(complaints: List[Dict], source_file_type: str) -> Tuple[int, int]:
     """
     Append complaints to master Excel file with deduplication
-    Uses FIXED SCHEMA approach to prevent column mapping errors
+    Uses FIXED SCHEMA + POSITIONAL MAPPING ONLY
+    NO dictionary-based DataFrame creation
     Returns: (new_count, total_count)
     """
     master_file = 'output/ncrp_master.xlsx'
@@ -344,15 +382,15 @@ def append_to_master_excel(complaints: List[Dict], source_file_type: str) -> Tup
     # Apply intelligence features
     enhanced_complaints = apply_intelligence_features(complaints)
     
-    # Build rows using fixed schema
+    # Build rows using fixed schema - explicit extraction
     new_rows = []
     for complaint in enhanced_complaints:
         row = build_row_from_complaint(complaint, source_file_type)
         new_rows.append(row)
     
-    # Create DataFrame with EXPLICIT column order using fixed schema
+    # Create DataFrame using POSITIONAL MAPPING ONLY
+    # This is the MANDATORY approach - no dictionary-based creation
     if new_rows:
-        # Build DataFrame row by row using list comprehension with fixed schema
         data = [[row[col] for col in COLUMNS] for row in new_rows]
         new_df = pd.DataFrame(data, columns=COLUMNS)
     else:
@@ -362,32 +400,44 @@ def append_to_master_excel(complaints: List[Dict], source_file_type: str) -> Tup
     existing_df = pd.DataFrame(columns=COLUMNS)
     if os.path.exists(master_file):
         try:
-            # Read with dtype specification to prevent type inference
-            existing_df = pd.read_excel(
-                master_file,
-                dtype={'Complaint_ID': str}  # Force Complaint_ID as string
-            )
+            # Read existing file
+            existing_raw = pd.read_excel(master_file, dtype={'Complaint_ID': str})
             
-            # Ensure existing DataFrame has correct columns
-            if list(existing_df.columns) != COLUMNS:
-                # Reorder and add missing columns
-                for col in COLUMNS:
-                    if col not in existing_df.columns:
-                        if col == 'Amount_Lost':
-                            existing_df[col] = 0.0
-                        elif col in ['Transaction_Count', 'Data_Quality_Score', 'Reporting_Delay_Days']:
-                            existing_df[col] = 0
+            # Rebuild using fixed schema - positional mapping
+            if not existing_raw.empty:
+                existing_data = []
+                for idx in range(len(existing_raw)):
+                    row_data = []
+                    for col in COLUMNS:
+                        if col in existing_raw.columns:
+                            val = existing_raw.iloc[idx][col]
+                            # Type conversion based on column
+                            if col == 'Complaint_ID':
+                                row_data.append(str(val))
+                            elif col == 'Amount_Lost':
+                                row_data.append(float(val) if pd.notna(val) else 0.0)
+                            elif col in ['Transaction_Count', 'Data_Quality_Score', 'Reporting_Delay_Days']:
+                                row_data.append(int(val) if pd.notna(val) else 0)
+                            else:
+                                row_data.append(str(val) if pd.notna(val) else 'Not Available')
                         else:
-                            existing_df[col] = 'Not Available'
-                # Reorder to match COLUMNS
-                existing_df = existing_df[COLUMNS]
-        except:
+                            # Default values for missing columns
+                            if col == 'Amount_Lost':
+                                row_data.append(0.0)
+                            elif col in ['Transaction_Count', 'Data_Quality_Score', 'Reporting_Delay_Days']:
+                                row_data.append(0)
+                            else:
+                                row_data.append('Not Available')
+                    existing_data.append(row_data)
+                
+                existing_df = pd.DataFrame(existing_data, columns=COLUMNS)
+        except Exception as e:
+            # If reading fails, start fresh
             existing_df = pd.DataFrame(columns=COLUMNS)
     
     # Get existing Complaint_IDs for deduplication
     existing_ids = set()
-    if not existing_df.empty and 'Complaint_ID' in existing_df.columns:
-        # Convert all to string for comparison
+    if not existing_df.empty:
         existing_ids = set(existing_df['Complaint_ID'].astype(str).str.strip())
     
     # Filter out duplicates from new rows
@@ -401,16 +451,20 @@ def append_to_master_excel(complaints: List[Dict], source_file_type: str) -> Tup
     
     new_count = len(filtered_rows)
     
-    # Combine existing and new records
+    # Combine existing and new records using POSITIONAL MAPPING
     if filtered_rows:
-        # Build DataFrame with explicit schema
-        data = [[row[col] for col in COLUMNS] for row in filtered_rows]
-        filtered_df = pd.DataFrame(data, columns=COLUMNS)
+        # Build DataFrame with explicit schema - positional mapping
+        filtered_data = [[row[col] for col in COLUMNS] for row in filtered_rows]
+        filtered_df = pd.DataFrame(filtered_data, columns=COLUMNS)
         
         if existing_df.empty:
             combined_df = filtered_df
         else:
-            combined_df = pd.concat([existing_df, filtered_df], ignore_index=True)
+            # Concatenate and rebuild to ensure correct schema
+            combined_temp = pd.concat([existing_df, filtered_df], ignore_index=True)
+            # Rebuild using positional mapping to ensure correctness
+            combined_data = [[combined_temp.iloc[idx][col] for col in COLUMNS] for idx in range(len(combined_temp))]
+            combined_df = pd.DataFrame(combined_data, columns=COLUMNS)
     else:
         combined_df = existing_df
     
@@ -418,16 +472,18 @@ def append_to_master_excel(complaints: List[Dict], source_file_type: str) -> Tup
     if combined_df.empty:
         combined_df = pd.DataFrame(columns=COLUMNS)
     
-    # Force data types one more time before saving
+    # Force data types one final time before saving
     combined_df['Complaint_ID'] = combined_df['Complaint_ID'].astype(str)
+    combined_df['Complaint_Date'] = combined_df['Complaint_Date'].astype(str)
+    combined_df['Incident_Date'] = combined_df['Incident_Date'].astype(str)
+    combined_df['Category'] = combined_df['Category'].astype(str)
+    combined_df['Sub_Category'] = combined_df['Sub_Category'].astype(str)
     combined_df['District'] = combined_df['District'].astype(str)
     combined_df['State'] = combined_df['State'].astype(str)
-    combined_df['Sub_Category'] = combined_df['Sub_Category'].astype(str)
-    combined_df['Transaction_Pattern'] = combined_df['Transaction_Pattern'].astype(str)
-    combined_df['Category'] = combined_df['Category'].astype(str)
     combined_df['Status'] = combined_df['Status'].astype(str)
     combined_df['Investigation_Ready'] = combined_df['Investigation_Ready'].astype(str)
     combined_df['Reporting_Delay_Status'] = combined_df['Reporting_Delay_Status'].astype(str)
+    combined_df['Transaction_Pattern'] = combined_df['Transaction_Pattern'].astype(str)
     combined_df['Source_File_Type'] = combined_df['Source_File_Type'].astype(str)
     
     combined_df['Amount_Lost'] = pd.to_numeric(combined_df['Amount_Lost'], errors='coerce').fillna(0.0).astype(float)

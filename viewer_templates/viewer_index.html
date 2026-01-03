@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NCRP Complaint Automation Tool</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 40px;
+            background-color: #ffffff;
+        }
+        .title {
+            font-size: 28px;
+            font-weight: 700;
+            color: #212529;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .form-label {
+            font-weight: 500;
+            color: #495057;
+            margin-bottom: 8px;
+        }
+        .form-control {
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 10px 12px;
+        }
+        .form-control:focus {
+            border-color: #80bdff;
+            box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+        }
+        .btn-primary {
+            background-color: #007bff;
+            border-color: #007bff;
+            padding: 12px 24px;
+            font-weight: 500;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+            border-color: #0056b3;
+        }
+        .btn-success {
+            background-color: #28a745;
+            border-color: #28a745;
+            padding: 12px 24px;
+            font-weight: 500;
+            margin-top: 20px;
+        }
+        .btn-success:hover {
+            background-color: #218838;
+            border-color: #1e7e34;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            border-color: #6c757d;
+            padding: 12px 24px;
+            font-weight: 500;
+            margin-top: 15px;
+        }
+        .btn-secondary:hover {
+            background-color: #5a6268;
+            border-color: #545b62;
+        }
+        .btn-primary:disabled, .btn-success:disabled, .btn-secondary:disabled {
+            background-color: #6c757d;
+            border-color: #6c757d;
+        }
+        .status-message {
+            margin-top: 20px;
+            padding: 12px 16px;
+            border-radius: 4px;
+            display: none;
+        }
+        .status-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .status-error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .results-section {
+            margin-top: 30px;
+            display: none;
+        }
+        .table {
+            background-color: #ffffff;
+            margin-top: 20px;
+        }
+        .table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+            border: 1px solid #dee2e6;
+            padding: 12px;
+        }
+        .table td {
+            border: 1px solid #dee2e6;
+            padding: 12px;
+            color: #212529;
+        }
+        .file-info {
+            font-size: 13px;
+            color: #6c757d;
+            margin-top: 8px;
+        }
+        .complaint-count {
+            font-size: 16px;
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1 class="title">NCRP Complaint Automation Tool</h1>
+            
+            <form id="uploadForm" enctype="multipart/form-data">
+                <div class="mb-3">
+                    <label for="fileInput" class="form-label">Upload NCRP Complaint File</label>
+                    <input type="file" class="form-control" id="fileInput" name="file" 
+                           accept=".pdf,.csv,.xlsx,.xls" required>
+                    <div class="file-info">Accepted formats: PDF, CSV, XLSX</div>
+                </div>
+                
+                <button type="submit" class="btn btn-primary" id="submitBtn" style="width: 100%;">
+                    Extract & View
+                </button>
+            </form>
+            
+            <div id="statusMessage" class="status-message"></div>
+            
+            <div id="resultsSection" class="results-section">
+                <div class="complaint-count" id="complaintCount"></div>
+                <div id="resultsTables"></div>
+                <button type="button" class="btn btn-success" id="saveBtn" style="width: 100%;">
+                    Save to Master Excel
+                </button>
+                <button type="button" class="btn btn-secondary" id="downloadBtn" style="width: 100%;">
+                    Download Master Excel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const form = document.getElementById('uploadForm');
+        const fileInput = document.getElementById('fileInput');
+        const submitBtn = document.getElementById('submitBtn');
+        const saveBtn = document.getElementById('saveBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const statusMessage = document.getElementById('statusMessage');
+        const resultsSection = document.getElementById('resultsSection');
+        const resultsTables = document.getElementById('resultsTables');
+        const complaintCount = document.getElementById('complaintCount');
+        
+        let currentComplaints = [];
+
+        function showMessage(message, isError) {
+            statusMessage.textContent = message;
+            statusMessage.className = 'status-message ' + (isError ? 'status-error' : 'status-success');
+            statusMessage.style.display = 'block';
+        }
+
+        function hideMessage() {
+            statusMessage.style.display = 'none';
+        }
+
+        function displayResults(complaints) {
+            currentComplaints = complaints;
+            resultsTables.innerHTML = '';
+            complaintCount.textContent = `Found ${complaints.length} complaint(s)`;
+            
+            const fieldNames = {
+                'Complaint_ID': 'Complaint ID',
+                'Complaint_Date': 'Complaint Date',
+                'Incident_Date': 'Incident Date',
+                'Category': 'Category',
+                'Sub_Category': 'Sub Category',
+                'District': 'District',
+                'State': 'State',
+                'Amount_Lost': 'Amount Lost',
+                'Status': 'Status',
+                'Action_Taken_Remarks': 'Action Taken / Remarks',
+                'Source_File_Type': 'Source File Type'
+            };
+            
+            const fields = ['Complaint_ID', 'Complaint_Date', 'Incident_Date', 'Category', 
+                          'Sub_Category', 'District', 'State', 'Amount_Lost', 'Status', 'Action_Taken_Remarks', 'Source_File_Type'];
+            
+            complaints.forEach((complaint, index) => {
+                const tableWrapper = document.createElement('div');
+                tableWrapper.style.marginBottom = '30px';
+                
+                if (complaints.length > 1) {
+                    const heading = document.createElement('h4');
+                    heading.textContent = `Complaint ${index + 1}`;
+                    heading.style.marginBottom = '15px';
+                    heading.style.fontSize = '18px';
+                    heading.style.fontWeight = '600';
+                    tableWrapper.appendChild(heading);
+                }
+                
+                const table = document.createElement('table');
+                table.className = 'table table-bordered';
+                
+                const thead = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+                const th1 = document.createElement('th');
+                th1.style.width = '30%';
+                th1.textContent = 'Field';
+                const th2 = document.createElement('th');
+                th2.style.width = '70%';
+                th2.textContent = 'Value';
+                headerRow.appendChild(th1);
+                headerRow.appendChild(th2);
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+                
+                const tbody = document.createElement('tbody');
+                
+                fields.forEach(field => {
+                    const row = document.createElement('tr');
+                    const fieldCell = document.createElement('td');
+                    const valueCell = document.createElement('td');
+                    
+                    fieldCell.textContent = fieldNames[field] || field;
+                    fieldCell.style.fontWeight = '500';
+
+                    // Allow long remarks to wrap nicely in the UI
+                    if (field === 'Action_Taken_Remarks') {
+                        valueCell.style.whiteSpace = 'normal';
+                        valueCell.style.maxWidth = '600px';
+                        valueCell.style.wordBreak = 'break-word';
+                    }
+                    
+                    const value = complaint[field] || 'Not Available';
+                    
+                    // If Status field: render editable dropdown and keep internal data in sync
+                    if (field === 'Status') {
+                        const select = document.createElement('select');
+                        select.className = 'form-select';
+                        select.style.width = '100%';
+                        select.style.fontWeight = '700';
+
+                        const options = ['Registered', 'Under Enquiry', 'FIR Filed', 'Closed', 'Amount Frozen'];
+                        const curVal = (value || '').toString();
+
+                        options.forEach(optVal => {
+                            const opt = document.createElement('option');
+                            opt.value = optVal;
+                            opt.text = optVal;
+                            if (optVal.toLowerCase() === curVal.toLowerCase()) {
+                                opt.selected = true;
+                            }
+                            select.appendChild(opt);
+                        });
+
+                        // Apply color based on selection
+                        const applySelectColor = () => {
+                            const vl = (select.value || '').toString().toLowerCase();
+                            if (vl.includes('under enquiry') || vl.includes('under investigation')) {
+                                select.style.color = '#fd7e14'; // orange
+                            } else if (vl.includes('fir') || vl.includes('fir filed')) {
+                                select.style.color = '#dc3545'; // red
+                            } else if (vl.includes('closed') || vl.includes('disposed')) {
+                                select.style.color = '#28a745'; // green
+                            } else if (vl.includes('frozen') || vl.includes('amount blocked')) {
+                                select.style.color = '#6f42c1'; // purple
+                            } else {
+                                select.style.color = '#0d6efd'; // blue for Registered/default
+                            }
+                        };
+
+                        applySelectColor();
+
+                        select.addEventListener('change', () => {
+                            // Update the in-memory complaint data so Save uses user-selected value
+                            currentComplaints[index]['Status'] = select.value;
+                            applySelectColor();
+                        });
+
+                        valueCell.appendChild(select);
+                    } else {
+                        // Non-editable fields
+                        valueCell.textContent = value;
+
+                        if (value === 'Not Available') {
+                            valueCell.style.color = '#6c757d';
+                            valueCell.style.fontStyle = 'italic';
+                        }
+                    }
+                    
+                    row.appendChild(fieldCell);
+                    row.appendChild(valueCell);
+                    tbody.appendChild(row);
+                });
+                
+                table.appendChild(tbody);
+                tableWrapper.appendChild(table);
+                resultsTables.appendChild(tableWrapper);
+            });
+            
+            resultsSection.style.display = 'block';
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const file = fileInput.files[0];
+            if (!file) {
+                showMessage('Please select a file', true);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Processing...';
+            hideMessage();
+            resultsSection.style.display = 'none';
+            currentComplaints = [];
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    displayResults(result.data);
+                    showMessage(`Successfully extracted ${result.count} complaint(s)`, false);
+                } else {
+                    showMessage(result.message || 'Error extracting data', true);
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, true);
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Extract & View';
+            }
+        });
+
+        saveBtn.addEventListener('click', async () => {
+            if (currentComplaints.length === 0) {
+                showMessage('No complaints to save', true);
+                return;
+            }
+
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+
+            try {
+                const response = await fetch('/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        complaints: currentComplaints
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showMessage(result.message, false);
+                } else {
+                    showMessage(result.message || 'Error saving to Excel', true);
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, true);
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save to Master Excel';
+            }
+        });
+
+        downloadBtn.addEventListener('click', async () => {
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = 'Downloading...';
+
+            try {
+                const response = await fetch('/download');
+                
+                if (response.ok) {
+                    // File download
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'ncrp_master.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                    showMessage('Master Excel file downloaded successfully', false);
+                } else {
+                    // Error response
+                    const result = await response.json();
+                    showMessage(result.message || 'Error downloading file', true);
+                }
+            } catch (error) {
+                showMessage('Error: ' + error.message, true);
+            } finally {
+                downloadBtn.disabled = false;
+                downloadBtn.textContent = 'Download Master Excel';
+            }
+        });
+    </script>
+</body>
+</html>

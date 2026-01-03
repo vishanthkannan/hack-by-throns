@@ -1,6 +1,7 @@
 """
 PDF Processor for NCRP Complaint Files
-Extracts complaint and transaction data from PDF files with robust extraction
+Extracts complaint and transaction data from PDF files
+FINAL FIX: Label-anchored, non-greedy regex patterns
 """
 
 import pdfplumber
@@ -24,27 +25,63 @@ def extract_text_from_pdf(filepath: str) -> str:
     return text
 
 
-def extract_field(pattern: str, text: str, flags: int = re.IGNORECASE | re.DOTALL) -> Optional[str]:
+def normalize_text(text: str) -> str:
     """
-    Reusable helper function to extract field using regex pattern
-    Handles line breaks, missing colons, and spacing issues
+    Normalize PDF text line-by-line
+    This ensures predictable line breaks for regex matching
+    """
+    # Replace \r with \n
+    text = text.replace("\r", "\n")
+    # Normalize multiple newlines to single newline
+    text = re.sub(r"\n+", "\n", text)
+    return text
+
+
+def extract_section(text: str, start_marker: str, end_marker: str) -> str:
+    """
+    Extract text section between two markers
+    Returns empty string if markers not found
+    """
+    try:
+        # Case-insensitive search for start marker
+        start_pattern = re.escape(start_marker)
+        start_match = re.search(start_pattern, text, re.IGNORECASE)
+        
+        if not start_match:
+            return ""
+        
+        start_pos = start_match.end()
+        
+        # Case-insensitive search for end marker after start
+        end_pattern = re.escape(end_marker)
+        end_match = re.search(end_pattern, text[start_pos:], re.IGNORECASE)
+        
+        if not end_match:
+            # If end marker not found, take until end of text
+            return text[start_pos:]
+        
+        end_pos = start_pos + end_match.start()
+        return text[start_pos:end_pos]
+    
+    except Exception:
+        return ""
+
+
+def extract_field(pattern: str, text: str) -> Optional[str]:
+    """
+    Safe helper function to extract field using regex pattern
+    NO re.DOTALL - matching must stop at line end
     """
     if not text or not pattern:
         return None
     
     try:
-        match = re.search(pattern, text, flags)
-        if match:
-            # Get the captured group (first group if multiple)
-            if match.groups():
-                result = match.group(1).strip()
-            else:
-                result = match.group(0).strip()
-            
-            # Clean up common issues
-            result = re.sub(r'\s+', ' ', result)  # Normalize whitespace
-            result = result.replace('\n', ' ').replace('\r', ' ')
-            
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match and match.groups():
+            result = match.group(1).strip()
+            # Stop at newline if present
+            if '\n' in result:
+                result = result.split('\n')[0].strip()
             return result if result else None
     except Exception as e:
         pass
@@ -52,81 +89,50 @@ def extract_field(pattern: str, text: str, flags: int = re.IGNORECASE | re.DOTAL
     return None
 
 
-def parse_date(date_str: str) -> str:
-    """Parse date string to YYYY-MM-DD format with multiple format support"""
-    if not date_str or date_str.strip() == "":
-        return ""
+def parse_ncrp_date(date_str: str) -> str:
+    """
+    Parse NCRP date from DD/MM/YYYY format to YYYY-MM-DD
+    NCRP dates are ALWAYS in DD/MM/YYYY format
+    Returns "Not Available" if parsing fails
+    """
+    if not date_str:
+        return "Not Available"
     
     date_str = date_str.strip()
     
-    # Common date formats
-    date_formats = [
-        '%d/%m/%Y', '%d-%m-%Y', '%Y-%m-%d',
-        '%d/%m/%y', '%d-%m-%y',
-        '%d %B %Y', '%d %b %Y',
-        '%B %d, %Y', '%b %d, %Y',
-        '%d/%m/%Y %I:%M %p',  # With time
-        '%d-%m-%Y %I:%M %p',
-    ]
+    if not date_str:
+        return "Not Available"
     
-    for fmt in date_formats:
-        try:
-            dt = datetime.strptime(date_str, fmt)
-            return dt.strftime('%Y-%m-%d')
-        except:
-            continue
-    
-    # Try regex patterns for flexible matching
-    patterns = [
-        r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})',
-        r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})',
-        r'(\d{1,2})\s+(\w+)\s+(\d{4})',  # DD Month YYYY
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, date_str)
-        if match:
-            parts = match.groups()
-            if len(parts) == 3:
-                try:
-                    if len(parts[2]) == 4:  # DD/MM/YYYY
-                        dt = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-                    elif len(parts[0]) == 4:  # YYYY/MM/DD
-                        dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
-                    else:
-                        continue
-                    return dt.strftime('%Y-%m-%d')
-                except:
-                    continue
-    
-    return ""
-
-
+    try:
+        # NCRP dates are ALWAYS in DD/MM/YYYY format
+        dt = datetime.strptime(date_str, "%d/%m/%Y")
+        return dt.strftime("%Y-%m-%d")
+    except:
+        return "Not Available"
 
 
 def extract_complaint_id(text: str) -> str:
     """
-    Extract complaint/acknowledgement number with robust patterns
-    Handles cases where number appears on next line
+    Extract Complaint ID (Acknowledgement Number)
+    MUST capture only digits after the label - NOT transaction references
     """
-    # Strong patterns for Complaint ID / Acknowledgement Number
-    patterns = [
-        # With label and colon (may span lines)
-        r'(?:Complaint\s+ID|Acknowledgment\s+Number|Acknowledgment\s+No|Ack\s+Number|Ack\s+No)[\s:]*[\n\r]?[\s:]*([A-Z0-9/-]{8,})',
-        # Without colon, number on same or next line
-        r'(?:Complaint\s+ID|Acknowledgment\s+Number|Ack\s+Number)[\s]*[\n\r]?\s*([A-Z0-9/-]{8,})',
-        # Pattern: Letters-Digits-Digits (e.g., NCRP-2024-123456)
-        r'([A-Z]{2,4}[-/]?\d{4,}[-/]?\d{4,})',
-        # Long numeric IDs (10+ digits)
-        r'\b(\d{10,})\b',
-        # Alphanumeric patterns
-        r'([A-Z]{2,}\d{6,})',
-    ]
+    # Primary pattern: Acknowledgement Number with digits only
+    pattern = r"Acknowledgement\s*Number\s*:\s*\n?\s*(\d{10,})"
+    result = extract_field(pattern, text)
+    if result:
+        return result
     
-    for pattern in patterns:
-        result = extract_field(pattern, text, re.IGNORECASE | re.DOTALL | re.MULTILINE)
-        if result and len(result) >= 8:
-            return result
+    # Fallback: Acknowledgement Number without colon
+    pattern = r"Acknowledgement\s*Number\s*\n\s*(\d{10,})"
+    result = extract_field(pattern, text)
+    if result:
+        return result
+    
+    # Last resort: Complaint ID with digits only (not alphanumeric)
+    pattern = r"Complaint\s*ID\s*:\s*\n?\s*(\d{10,})"
+    result = extract_field(pattern, text)
+    if result:
+        return result
     
     return ""
 
@@ -134,19 +140,14 @@ def extract_complaint_id(text: str) -> str:
 def extract_category(text: str) -> str:
     """
     Extract Category of Complaint
-    Text may appear without colon
+    Captures only the immediate value on next line
     """
-    patterns = [
-        r'(?:Category\s+of\s+Complaint|Complaint\s+Category|Category)[\s:]*[\n\r]?[\s:]*([A-Za-z\s]+?)(?:\n|Sub\s+Category|$)',
-        r'(?:Category\s+of\s+Complaint|Complaint\s+Category)[\s]*[\n\r]?\s*([A-Za-z\s]{3,})',
-        # Look for common categories in text
-        r'\b(Fraud|Cyber\s+Crime|Financial\s+Crime|Online\s+Fraud|Banking\s+Fraud|UPI\s+Fraud|Phishing|Scam|Identity\s+Theft|Social\s+Media\s+Fraud)\b',
-    ]
-    
-    for pattern in patterns:
-        result = extract_field(pattern, text, re.IGNORECASE | re.DOTALL)
-        if result:
-            return result.title()
+    pattern = r"Category\s+of\s+complaint\s*\n\s*([A-Za-z ]+)"
+    result = extract_field(pattern, text)
+    if result:
+        # Stop at newline or next label
+        result = result.split('\n')[0].strip()
+        return result.title()
     
     return ""
 
@@ -154,57 +155,52 @@ def extract_category(text: str) -> str:
 def extract_sub_category(text: str) -> str:
     """
     Extract Sub Category of Complaint
-    Often appears on next line without colon
+    Captures only the immediate value on next line
     """
-    patterns = [
-        # With label, may span lines
-        r'(?:Sub\s+Category\s+of\s+Complaint|Sub\s+Category|Subcategory)[\s:]*[\n\r]?[\s:]*([A-Za-z\s]+?)(?:\n|District|State|Amount|$)',
-        # Without colon, on next line
-        r'(?:Sub\s+Category\s+of\s+Complaint|Sub\s+Category)[\s]*[\n\r]?\s*([A-Za-z\s]{3,})',
-        # Common sub-categories
-        r'\b(UPI\s+Fraud|Online\s+Transaction\s+Fraud|Credit\s+Card\s+Fraud|Debit\s+Card\s+Fraud|Bank\s+Transfer\s+Fraud|Investment\s+Scam|Job\s+Scam|Loan\s+Scam)\b',
-    ]
-    
-    for pattern in patterns:
-        result = extract_field(pattern, text, re.IGNORECASE | re.DOTALL)
-        if result:
-            return result.title()
-    
-    return ""
-
-
-def extract_complaint_date(text: str) -> str:
-    """Extract Complaint Date"""
-    patterns = [
-        r'(?:Complaint\s+Date|Date\s+of\s+Complaint|Filed\s+Date)[\s:]*[\n\r]?[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
-        r'(?:Complaint\s+Date|Date\s+of\s+Complaint)[\s]*[\n\r]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
-    ]
-    
-    for pattern in patterns:
-        result = extract_field(pattern, text, re.IGNORECASE | re.DOTALL)
-        if result:
-            parsed = parse_date(result)
-            if parsed:
-                return parsed
+    pattern = r"Sub\s+Category\s+of\s+Complaint\s*\n\s*([A-Za-z ]+)"
+    result = extract_field(pattern, text)
+    if result:
+        # Stop at newline or next label
+        result = result.split('\n')[0].strip()
+        return result.title()
     
     return ""
 
 
 def extract_incident_date(text: str) -> str:
-    """Extract Incident Date/Time (may include AM/PM and line breaks)"""
-    patterns = [
-        r'(?:Incident\s+Date|Date\s+of\s+Incident|Occurred\s+Date|Date\s+of\s+Occurrence)[\s:]*[\n\r]?[\s:]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}(?:\s+\d{1,2}:\d{2}(?:\s+[AP]M)?)?)',
-        r'(?:Incident\s+Date|Date\s+of\s+Incident)[\s]*[\n\r]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
-    ]
+    """
+    Extract Incident Date/Time
+    Extract as RAW STRING in DD/MM/YYYY format
+    NCRP dates are ALWAYS in DD/MM/YYYY format
+    """
+    # Extract DD/MM/YYYY format explicitly
+    pattern = r"Incident\s+Date\/Time\s*\n\s*([\d]{2}/[\d]{2}/[\d]{4})"
+    result = extract_field(pattern, text)
+    if result:
+        # Parse the date explicitly
+        return parse_ncrp_date(result)
     
-    for pattern in patterns:
-        result = extract_field(pattern, text, re.IGNORECASE | re.DOTALL)
-        if result:
-            # Remove time portion if present
-            date_part = result.split()[0] if ' ' in result else result
-            parsed = parse_date(date_part)
-            if parsed:
-                return parsed
+    # Fallback: Incident Date without time
+    pattern = r"Incident\s+Date\s*\n\s*([\d]{2}/[\d]{2}/[\d]{4})"
+    result = extract_field(pattern, text)
+    if result:
+        return parse_ncrp_date(result)
+    
+    return ""
+
+
+def extract_complaint_date(text: str) -> str:
+    """
+    Extract Complaint Date
+    Extract as RAW STRING in DD/MM/YYYY format
+    NCRP dates are ALWAYS in DD/MM/YYYY format
+    """
+    # Extract DD/MM/YYYY format explicitly
+    pattern = r"Complaint\s+Date\s*\n\s*([\d]{2}/[\d]{2}/[\d]{4})"
+    result = extract_field(pattern, text)
+    if result:
+        # Parse the date explicitly
+        return parse_ncrp_date(result)
     
     return ""
 
@@ -214,75 +210,88 @@ def extract_amount(text: str) -> float:
     Extract Total Fraudulent Amount reported by complainant
     Must capture numeric value with commas and decimals
     """
-    # Strong patterns for amount extraction
-    patterns = [
-        # With label "Total Fraudulent Amount"
-        r'(?:Total\s+Fraudulent\s+Amount|Amount\s+Lost|Fraudulent\s+Amount|Amount\s+Reported)[\s:]*[\n\r]?[\s:]*[₹Rs\.\s]*([\d,]+\.?\d*)',
-        # Currency symbol patterns
-        r'₹\s*([\d,]+\.?\d*)',
-        r'Rs\.?\s*([\d,]+\.?\d*)',
-        r'INR\s*([\d,]+\.?\d*)',
-        # Amount with "rupees" or similar
-        r'([\d,]+\.?\d*)\s*(?:rupees|Rs|₹|INR)',
-    ]
+    pattern = r"Total\s+Fraudulent\s+Amount\s+reported\s+by\s+complainant\s*:\s*([\d,\.]+)"
+    result = extract_field(pattern, text)
+    if result:
+        try:
+            amount_str = result.replace(',', '')
+            amount = float(amount_str)
+            return amount if amount > 0 else 0.0
+        except:
+            pass
     
-    amounts = []
-    for pattern in patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
-        for match in matches:
-            try:
-                amount_str = str(match).replace(',', '')
-                amount = float(amount_str)
-                if amount > 0:  # Only valid positive amounts
-                    amounts.append(amount)
-            except:
-                continue
+    # Fallback: Look for amount with currency symbol after label
+    pattern = r"Total\s+Fraudulent\s+Amount\s+reported\s+by\s+complainant\s*:\s*[₹Rs\.\s]*([\d,\.]+)"
+    result = extract_field(pattern, text)
+    if result:
+        try:
+            amount_str = result.replace(',', '')
+            amount = float(amount_str)
+            return amount if amount > 0 else 0.0
+        except:
+            pass
     
-    # Return the largest amount found (most likely the total)
-    return max(amounts) if amounts else 0.0
+    return 0.0
 
 
 def extract_district(text: str) -> str:
-    """Extract District"""
-    patterns = [
-        r'(?:District|City)[\s:]*[\n\r]?[\s:]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
-        r'(?:District|City)[\s]*[\n\r]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
-    ]
-    
-    for pattern in patterns:
-        result = extract_field(pattern, text, re.IGNORECASE)
-        if result:
-            return result
+    """
+    Extract District
+    CRITICAL FIX: MUST capture only the next line text, not paragraphs
+    """
+    pattern = r"District\s*\n\s*([A-Za-z ]+)"
+    result = extract_field(pattern, text)
+    if result:
+        # Stop at newline - only take first line
+        result = result.split('\n')[0].strip()
+        # Remove any trailing labels that might have been captured
+        # Stop if we see common next labels
+        stop_words = ['State', 'Amount', 'Complaint', 'Category', 'Sub']
+        for word in stop_words:
+            if word in result:
+                result = result.split(word)[0].strip()
+        return result
     
     return ""
 
 
 def extract_state(text: str) -> str:
-    """Extract State"""
-    patterns = [
-        r'(?:State|Province)[\s:]*[\n\r]?[\s:]*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
-        r'(?:State|Province)[\s]*[\n\r]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
-    ]
-    
-    for pattern in patterns:
-        result = extract_field(pattern, text, re.IGNORECASE)
-        if result:
-            return result
+    """
+    Extract State
+    CRITICAL FIX: MUST capture only the next line text, not paragraphs
+    """
+    pattern = r"State\s*\n\s*([A-Za-z ]+)"
+    result = extract_field(pattern, text)
+    if result:
+        # Stop at newline - only take first line
+        result = result.split('\n')[0].strip()
+        # Remove any trailing labels that might have been captured
+        # Stop if we see common next labels
+        stop_words = ['District', 'Amount', 'Complaint', 'Category', 'Sub']
+        for word in stop_words:
+            if word in result:
+                result = result.split(word)[0].strip()
+        return result
     
     return ""
 
 
 def extract_transaction_ids(text: str) -> List[str]:
-    """Extract transaction IDs/UTR numbers"""
+    """
+    Extract transaction IDs/UTR numbers
+    Only extract from transaction-specific sections, not from complaint ID area
+    """
+    transactions = []
+    
+    # Look for UTR/Transaction ID labels specifically
     patterns = [
-        r'(?:UTR|Transaction\s+ID|Transaction\s+Number|Txn\s+ID|Ref\s+Number)[\s:]*[\n\r]?[\s:]*([A-Z0-9]{8,})',
-        r'([A-Z]{2,}\d{10,})',  # Alphanumeric patterns
-        r'\b(\d{12,})\b',  # Long numeric IDs
+        r"UTR\s*Number\s*:\s*\n?\s*([A-Z0-9]{8,})",
+        r"Transaction\s*ID\s*:\s*\n?\s*([A-Z0-9]{8,})",
+        r"Transaction\s*Reference\s*:\s*\n?\s*([A-Z0-9]{8,})",
     ]
     
-    transactions = []
     for pattern in patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        matches = re.findall(pattern, text, re.IGNORECASE)
         for match in matches:
             trans_id = str(match).strip()
             if len(trans_id) >= 8:
@@ -309,12 +318,11 @@ def extract_bank_platform_info(text: str) -> str:
 
 def extract_status(text: str) -> str:
     """Extract complaint status"""
-    patterns = [
-        r'(?:Status|Complaint\s+Status)[\s:]*[\n\r]?[\s:]*([A-Za-z\s]+?)(?:\n|$)',
-    ]
-    
-    result = extract_field(patterns[0], text, re.IGNORECASE | re.DOTALL)
+    pattern = r"Status\s*:\s*\n?\s*([A-Za-z ]+)"
+    result = extract_field(pattern, text)
     if result:
+        # Stop at newline
+        result = result.split('\n')[0].strip()
         return result.title()
     
     return "Pending"
@@ -322,7 +330,8 @@ def extract_status(text: str) -> str:
 
 def process_pdf(filepath: str) -> List[Dict]:
     """
-    Process PDF file and extract NCRP complaint data with robust extraction
+    Process PDF file and extract NCRP complaint data
+    Uses label-anchored, non-greedy regex patterns
     Returns list of complaint dictionaries with normalized data
     """
     try:
@@ -331,34 +340,63 @@ def process_pdf(filepath: str) -> List[Dict]:
         if not text or len(text.strip()) < 50:
             return []
         
-        # Extract all fields using robust patterns
-        complaint_id = extract_complaint_id(text)
-        category = extract_category(text)
-        sub_category = extract_sub_category(text)
+        # STEP 1: Normalize text line-by-line (MANDATORY)
+        text = normalize_text(text)
+        
+        # STEP 2: Isolate sections for targeted extraction
+        # Extract complaint header section (between "Complaint Type" and "Complainant Details")
+        header_text = extract_section(text, "Complaint Type", "Complainant Details")
+        
+        # Extract complainant/location section (between "Complainant Details" and "Suspect Details")
+        location_text = extract_section(text, "Complainant Details", "Suspect Details")
+        
+        # STEP 3: Apply regex ONLY on correct sections
+        # Extract from header_text: Complaint_ID, Category, Sub_Category
+        complaint_id_raw = extract_complaint_id(header_text)
+        
+        # MANDATORY GUARDRAIL: Validate Complaint_ID before proceeding
+        # A complaint row MUST be created ONLY IF:
+        # - Acknowledgement Number exists
+        # - Acknowledgement Number contains DIGITS ONLY
+        # - Length >= 10
+        if not complaint_id_raw or not complaint_id_raw.isdigit() or len(complaint_id_raw) < 10:
+            # DO NOT create a complaint row - skip the record completely
+            return []
+        
+        # Extract from header_text: Category, Sub_Category
+        category = extract_category(header_text)
+        sub_category = extract_sub_category(header_text)
+        
+        # Extract from location_text: District, State
+        district = extract_district(location_text)
+        state = extract_state(location_text)
+        
+        # Extract dates from FULL TEXT (dates may be anywhere in PDF)
         complaint_date = extract_complaint_date(text)
         incident_date = extract_incident_date(text)
+        
+        # Extract other fields from full text (may be in various sections)
         amount = extract_amount(text)
-        district = extract_district(text)
-        state = extract_state(text)
         transactions = extract_transaction_ids(text)
         bank_info = extract_bank_platform_info(text)
         status = extract_status(text)
         
-        # Normalize all fields using shared normalizer
-        complaint_id = normalize_complaint_id(complaint_id) if complaint_id else "Not Available"
+        # Normalize Complaint_ID (already validated as digits only)
+        complaint_id = normalize_complaint_id(complaint_id_raw)
         category = normalize_string(category) if category else "Not Available"
         sub_category = normalize_string(sub_category) if sub_category else "Not Available"
-        complaint_date = complaint_date if complaint_date else datetime.now().strftime('%Y-%m-%d')
-        incident_date = incident_date if incident_date else complaint_date
+        
+        # Dates are already parsed - use "Not Available" if missing (NO datetime.now fallback)
+        complaint_date = complaint_date if complaint_date else "Not Available"
+        incident_date = incident_date if incident_date else "Not Available"
         amount = normalize_amount(amount)
         district = normalize_string(district) if district else "Not Available"
         state = normalize_string(state) if state else "Not Available"
         status = normalize_string(status) if status else "Pending"
         bank_info = normalize_string(bank_info) if bank_info else "Not Available"
         
-        # Generate Complaint_ID if still missing
-        if complaint_id == "Not Available":
-            complaint_id = f"PDF_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # Complaint_ID is already validated and normalized
+        # No need to generate fallback ID - validation ensures it exists
         
         # Create complaint record with all normalized fields
         complaint = {

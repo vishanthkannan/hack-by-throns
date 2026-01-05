@@ -33,3 +33,4 @@ A lightweight Flask-based web application designed to process NCRP complaint fil
 - OCR support for scanned NCRP documents  
 - Database-backed storage and analytics  
 - Advanced cybercrime pattern detection
+- get more info in the excel sheet
